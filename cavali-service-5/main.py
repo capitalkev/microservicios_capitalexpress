@@ -1,10 +1,9 @@
 # cavali-service/main.py
 import os
-import base64
-import json
+
 import requests
 import time
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import List, Dict, Any
 from dotenv import load_dotenv
