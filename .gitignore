@@ -1,0 +1,38 @@
+# Ignorar entornos virtuales en cualquier subcarpeta
+**/venv/
+**/.venv/
+**/env/
+
+# Ignorar archivos de variables de entorno
+**/.env
+*.env
+
+# Ignorar __pycache__ en cualquier lugar
+**/__pycache__/
+__pycache__/
+
+# Ignorar archivos compilados de Python
+*.py[cod]
+*$py.class
+
+# Ignorar archivos de tokens y credenciales
+**/token.json
+**/credentials.json
+*.token
+*.key
+*.pem
+*.crt
+*.secret.*
+*.secrets.*
+
+# Ignorar logs
+*.log
+
+# Ignorar archivos del sistema y configuraciones de IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Evitar subir este mismo .gitignore si se desea
+# .gitignore
