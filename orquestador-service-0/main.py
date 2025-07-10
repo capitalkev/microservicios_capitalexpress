@@ -10,9 +10,14 @@ from google.cloud import storage
 
 app = FastAPI()
 
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173"
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -62,16 +67,8 @@ async def submit_operation(
     parser_response = requests.post("http://localhost:8001/parser", json=message_to_parser)
     parsed_data = parser_response.json()
 
-    # === 2. Llama a TRELLO ===
-    trello_payload = {
-        "operation_id": operation_id,
-        "pdf_paths": pdf_paths,
-        "respaldo_paths": respaldo_paths,
-        "parsed_invoice_data": parsed_data
-    }
-    trello_response = requests.post(TRELLO_SERVICE_URL, json=trello_payload)
 
-    # === 3. Llama a GMAIL ===
+    # === 2. Llama a GMAIL ===
     gmail_payload = {
         "operation_id": operation_id,
         "pdf_paths": pdf_paths,
@@ -80,14 +77,18 @@ async def submit_operation(
     }
     gmail_response = requests.post(GMAIL_SERVICE_URL, json=gmail_payload)
 
-    # === 4. Llama a Drive ====
-    all_files_to_archive = xml_paths + pdf_paths + respaldo_paths
-    drive_payload = {
-        "operation_id": operation_id,
-        "file_paths": all_files_to_archive
-    }
-    drive_response = requests.post(DRIVE_SERVICE_URL, json=drive_payload)
 
+    # === 3. Llama a TRELLO ===
+    trello_payload = {
+        "operation_id": operation_id,
+        "pdf_paths": pdf_paths,
+        "respaldo_paths": respaldo_paths,
+        "parsed_invoice_data": parsed_data
+    }
+    trello_response = requests.post(TRELLO_SERVICE_URL, json=trello_payload)
+
+    # === 4. Llama a Cavli ====
+    
     xml_files_data_for_cavali = []
     for xml_file in xml_files:
         await xml_file.seek(0)
@@ -105,6 +106,15 @@ async def submit_operation(
     cavali_response = requests.post(CAVALI_SERVICE_URL, json=cavali_payload)
 
 
+    # === 4. Llama a Drive ====
+    all_files_to_archive = xml_paths + pdf_paths + respaldo_paths
+    drive_payload = {
+        "operation_id": operation_id,
+        "file_paths": all_files_to_archive
+    }
+    drive_response = requests.post(DRIVE_SERVICE_URL, json=drive_payload)
+
+    
     return {
         "message": "Operación procesada",
         "operation_id": operation_id,
