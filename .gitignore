@@ -18,6 +18,8 @@ __pycache__/
 # Ignorar archivos de tokens y credenciales
 **/token.json
 **/credentials.json
+**/client_secret.json
+**.json
 *.token
 *.key
 *.pem
@@ -35,4 +37,4 @@ Thumbs.db
 .idea/
 
 # Evitar subir este mismo .gitignore si se desea
-# .gitignore
+.gitignore

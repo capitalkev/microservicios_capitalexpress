@@ -1,165 +1,192 @@
-# orquestador-service/main.py
+# orquestador-service-0/main.py
 import uuid
-import json, os
+import json
+import os
 import base64
 import requests
 from typing import List, Annotated
+from collections import defaultdict
 from dotenv import load_dotenv
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
+
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 from google.cloud import storage
 
-# Módulo de base de datos que ya tienes
-from database import (
-    crear_operaciones_agrupadas,
-    update_log,
-    get_operation_status_from_db,
-    actualizar_url_drive  # <-- IMPORTAMOS LA NUEVA FUNCIÓN
-)
+# --- Importaciones de la aplicación ---
+from database import get_db, engine
+from repository import OperationRepository
+import models
 
-# Carga las variables de entorno desde el archivo .env
+# --- Crear tablas en la BD al iniciar (si no existen) ---
+models.Base.metadata.create_all(bind=engine)
+
+# Cargar variables de entorno del archivo .env
 load_dotenv()
 
-app = FastAPI(title="Orquestador de Operaciones")
+# --- Inicialización de la Aplicación FastAPI ---
+app = FastAPI(
+    title="Orquestador de Operaciones Multi-Moneda",
+    description="Orquesta el procesamiento de operaciones de factoring, creando lotes por moneda."
+)
 
 # --- Configuración de CORS ---
-origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- URLs de los Microservicios (desde .env) ---
+# --- URLs de los Microservicios ---
 BUCKET_NAME = os.getenv("BUCKET_NAME")
-PARSER_SERVICE_URL = os.getenv("PARSER_SERVICE_URL", "http://localhost:8001/parser")
-GMAIL_SERVICE_URL = os.getenv("GMAIL_SERVICE_URL", "http://localhost:8003/gmail")
-CAVALI_SERVICE_URL = os.getenv("CAVALI_SERVICE_URL", "http://localhost:8005/validate")
-TRELLO_SERVICE_URL = os.getenv("TRELLO_SERVICE_URL", "http://localhost:8002/trello")
-DRIVE_SERVICE_URL = os.getenv("DRIVE_SERVICE_URL", "http://localhost:8004/drive")
+PARSER_SERVICE_URL = "http://localhost:8001/parser"
+CAVALI_SERVICE_URL = "http://localhost:8005/validate-invoices"
+DRIVE_SERVICE_URL = "http://localhost:8004/archive-files"
+GMAIL_SERVICE_URL = "http://localhost:8003/gmail"
+TRELLO_SERVICE_URL = "http://localhost:8002/trello"
 
+# --- Clientes de Google ---
 storage_client = storage.Client()
 bucket = storage_client.bucket(BUCKET_NAME)
 
-# --- Tareas en Segundo Plano ---
-def run_background_tasks(
-    op_id: str,
-    facturas_de_moneda: list,
-    xml_files_data_for_cavali: list,
-    all_file_paths: list,
-    pdf_paths: list,
-    respaldo_paths: list,
-    metadata: dict
+@app.post("/submit-operation", summary="Registrar y Procesar Operación Multi-Moneda")
+async def submit_multi_currency_operation(
+    metadata_str: Annotated[str, Form(alias="metadata", description="Objeto JSON con metadatos de la operación")],
+    xml_files: Annotated[List[UploadFile], File(alias="xml_files", description="Archivos XML de las facturas")],
+    pdf_files: Annotated[List[UploadFile], File(alias="pdf_files", description="Archivos PDF de las facturas")],
+    respaldo_files: Annotated[List[UploadFile], File(alias="respaldo_files", description="Archivos de respaldo (imágenes, docs)")],
+    db: Session = Depends(get_db)
 ):
     """
-    Función más limpia que ejecuta los microservicios y actualiza los logs.
+    Endpoint principal que orquesta el flujo completo de una operación de factoring.
     """
     try:
-        # === 1. GMAIL ===
-        email_msg = f"Correos enviados a kevin.tupac@capitalexpress.cl."
-        update_log(op_id, "Envío de Verificación", "procesando", "Enviando correos...")
-        gmail_payload = {"operation_id": op_id, "parsed_invoice_data": {"results": facturas_de_moneda}, "pdf_paths": pdf_paths, "metadata": metadata}
-        requests.post(GMAIL_SERVICE_URL, json=gmail_payload).raise_for_status()
-        update_log(op_id, "Envío de Verificación", "ok", email_msg)
+        metadata = json.loads(metadata_str)
+        upload_id = f"UPLOAD-{uuid.uuid4().hex[:8].upper()}"
 
-        # === 2. CAVALI ===
-        update_log(op_id, "Bloqueo de Facturas en CAVALI", "procesando", "Validando facturas...")
-        cavali_payload = {"operation_id": op_id, "xml_files_data": xml_files_data_for_cavali}
-        requests.post(CAVALI_SERVICE_URL, json=cavali_payload).raise_for_status()
+        # --- 1. Subir todos los archivos a Google Cloud Storage ---
+        def upload_file(file: UploadFile, folder: str) -> str:
+            blob_path = f"{upload_id}/{folder}/{file.filename}"
+            blob = bucket.blob(blob_path)
+            file.file.seek(0)
+            blob.upload_from_file(file.file)
+            return f"gs://{BUCKET_NAME}/{blob_path}"
 
-        # === 3. TRELLO ===
-        update_log(op_id, "Carga en Trello", "procesando", "Creando tarjeta...")
-        trello_payload = {"operation_id": op_id, "parsed_invoice_data": {"results": facturas_de_moneda}, "pdf_paths": pdf_paths, "respaldo_paths": respaldo_paths}
-        requests.post(TRELLO_SERVICE_URL, json=trello_payload).raise_for_status()
-        update_log(op_id, "Carga en Trello", "ok", "Tarjeta creada exitosamente.")
+        xml_paths = [upload_file(f, "xml") for f in xml_files]
+        pdf_paths = [upload_file(f, "pdf") for f in pdf_files]
+        respaldo_paths = [upload_file(f, "respaldos") for f in respaldo_files]
+        all_gcs_paths = xml_paths + pdf_paths + respaldo_paths
 
-        # === 4. DRIVE ===
-        update_log(op_id, "Archivado en Drive", "procesando", "Subiendo archivos a Drive...")
-        drive_payload = {"operation_id": op_id, "file_paths": all_file_paths}
-        drive_response = requests.post(DRIVE_SERVICE_URL, json=drive_payload)
-        drive_response.raise_for_status()
-        drive_url = drive_response.json().get("drive_folder_url")
-        
-        # Guardamos la URL de Drive en la base de datos
-        if drive_url:
-            actualizar_url_drive(op_id, drive_url)
-        
-        update_log(op_id, "Archivado en Drive", "ok", "Archivos guardados correctamente.")
+        parser_payload = {
+            "operation_id": upload_id,
+            "xml_paths": xml_paths
+        }
+        print("--- 📝 Enviando XMLs al servicio de Parser ---")
+        # --- 2. Parsear XMLs para obtener los datos estructurados ---
+        parser_response = requests.post(PARSER_SERVICE_URL, json=parser_payload)
+        parser_response.raise_for_status()
+        parsed_results = parser_response.json().get("results", [])
 
-    except Exception as e:
-        # Registra un log de error si cualquier paso falla
-        update_log(op_id, "Orquestador", "error", f"Error en tareas de fondo: {e}")
+        invoices_data_with_filename = []
+        for res in parsed_results:
+            if res.get('status') == 'SUCCESS':
+                data = res['parsed_invoice_data']
+                data['xml_filename'] = os.path.basename(res['xml_path'])
+                invoices_data_with_filename.append(data)
 
-@app.get("/operation-group/{group_id}/status")
-async def get_group_status(group_id: str):
-    return get_operation_status_from_db(group_id)
+        if not invoices_data_with_filename:
+            raise HTTPException(status_code=400, detail="No se pudo parsear ninguna factura válida de los XMLs.")
 
-@app.post("/submit-operation")
-async def submit_operation(
-    background_tasks: BackgroundTasks,
-    metadata_str: Annotated[str, Form(alias="metadata")],
-    xml_files: Annotated[List[UploadFile], File(alias="xml_files")],
-    pdf_files: Annotated[List[UploadFile], File(alias="pdf_files")],
-    respaldo_files: Annotated[List[UploadFile], File(alias="respaldo_files")]
-):
-    metadata = json.loads(metadata_str)
-    
-    # 1. SUBIR ARCHIVOS Y PARSEAR XML
-    upload_id = f"UPLOAD-{uuid.uuid4().hex[:8].upper()}"
-    def upload_file(file: UploadFile, folder: str) -> str:
-        blob_path = f"{upload_id}/{folder}/{file.filename}"
-        blob = bucket.blob(blob_path)
-        file.file.seek(0)
-        blob.upload_from_file(file.file)
-        return f"gs://{BUCKET_NAME}/{blob_path}"
+        # --- 3. Agrupar las facturas por moneda ---
+        invoices_by_currency = defaultdict(list)
+        for inv in invoices_data_with_filename:
+            invoices_by_currency[inv['currency']].append(inv)
 
-    xml_paths = [upload_file(f, "xml") for f in xml_files]
-    pdf_paths = [upload_file(f, "pdf") for f in pdf_files]
-    respaldo_paths = [upload_file(f, "respaldos") for f in respaldo_files]
-    all_file_paths = xml_paths + pdf_paths + respaldo_paths
+        repo = OperationRepository(db)
+        created_operations = []
 
-    parser_response = requests.post(PARSER_SERVICE_URL, json={"operation_id": upload_id, "xml_paths": xml_paths})
-    parser_response.raise_for_status()
-    parsed_data = parser_response.json()
+        # --- 4. Procesar cada grupo de moneda como una operación independiente ---
+        for currency, invoices_in_group in invoices_by_currency.items():
+            print(f"--- ⚙️  Procesando Lote para Moneda: {currency} ---")
 
-    # 2. AGRUPAR FACTURAS POR MONEDA
-    grouped_invoices = {}
-    for result in parsed_data.get('results', []):
-        moneda = result['parsed_invoice_data']['currency']
-        if moneda not in grouped_invoices:
-            grouped_invoices[moneda] = {'facturas': [], 'total_neto': 0.0}
-        grouped_invoices[moneda]['facturas'].append(result)
-        grouped_invoices[moneda]['total_neto'] += result['parsed_invoice_data']['net_amount']
-
-    # 3. CREAR OPERACIONES EN LA BASE DE DATOS
-    group_id = f"GRP-{uuid.uuid4().hex[:8].upper()}"
-    operation_ids = crear_operaciones_agrupadas(group_id, grouped_invoices, metadata.get('user_email'))
-    
-    # 4. PREPARAR DATOS Y LANZAR TAREAS
-    xml_files_data_for_cavali = []
-    for xml_file in xml_files:
-        content_bytes = await xml_file.read()
-        await xml_file.seek(0)
-        xml_files_data_for_cavali.append({"filename": xml_file.filename, "content_base64": base64.b64encode(content_bytes).decode('utf-8')})
-
-    for op_id in operation_ids:
-        moneda_actual = op_id.split('-')[-1]
-        facturas_de_moneda = grouped_invoices[moneda_actual]['facturas']
-        services_to_log = ["Envío de Verificación", "Bloqueo de Facturas en CAVALI", "Carga en Trello", "Archivado en Drive"]
-        for service in services_to_log:
-            update_log(op_id, service, "pendiente", "En espera...")
+            # --- 4.1. Validar en CAVALI ---
+            xml_filenames_in_group = {inv['xml_filename'] for inv in invoices_in_group}
+            xml_files_b64_group = []
             
-        background_tasks.add_task(
-            run_background_tasks,
-            op_id=op_id,
-            facturas_de_moneda=facturas_de_moneda,
-            xml_files_data_for_cavali=xml_files_data_for_cavali,
-            all_file_paths=all_file_paths,
-            pdf_paths=pdf_paths,
-            respaldo_paths=respaldo_paths,
-            metadata=metadata
-        )
+            for xml_file in xml_files:
+                await xml_file.seek(0)
+                if xml_file.filename in xml_filenames_in_group:
+                    content_bytes = await xml_file.read()
+                    xml_files_b64_group.append({
+                        "filename": xml_file.filename,
+                        "content_base64": base64.b64encode(content_bytes).decode('utf-8')
+                    })
+            print("--- 📄 Enviando XMLs al servicio de CAVALI para validación ---")
+            cavali_response = requests.post(CAVALI_SERVICE_URL, json={"xml_files_data": xml_files_b64_group})
+            cavali_response.raise_for_status()
+            cavali_results_json = cavali_response.json().get("results", {})
+            
+            if cavali_results_json:
+                 first_result = next(iter(cavali_results_json.values()), {})
+                 global_process_id = first_result.get("process_id")
+                 cavali_results_json["global_process_id"] = global_process_id
+            print("--- ✅ Validación en CAVALI completada ---")
+            # --- 4.2. Generar ID y Archivar en Drive ---
+            print("--- 📂 Generando ID de operación y archivando archivos en Google Drive ---")
+            operation_id = repo.generar_siguiente_id_operacion()
+            drive_response = requests.post(DRIVE_SERVICE_URL, json={"operation_id": operation_id, "gcs_file_paths": all_gcs_paths})
+            print(drive_response.text)
+            drive_response.raise_for_status()
+            drive_folder_url = drive_response.json().get("drive_folder_url")
+            
+            print("--- 📂 Archivos archivados en Google Drive con éxito ---")
+            print("")
+            # --- 4.3. Guardar la operación en la BD ---
+            repo.save_full_operation(operation_id, metadata, drive_folder_url, invoices_in_group, cavali_results_json)
 
-    return {"message": "Operación registrada y en proceso.", "group_id": group_id}
+            created_operations.append({
+                "operation_id": operation_id, "currency": currency,
+                "drive_url": drive_folder_url, "invoice_count": len(invoices_in_group)
+            })
+            
+            # --- 4.4. Enviar notificaciones (Gmail y Trello) ---
+            parser_results_for_group = [res for res in parsed_results if os.path.basename(res.get('xml_path', '')) in xml_filenames_in_group]
+            
+            # --- CÓDIGO DE GMAIL AÑADIDO AQUÍ ---
+            try:
+                # El payload necesita los datos parseados y las rutas de los PDFs
+                gmail_payload = {
+                    "parsed_invoice_data": {"results": parser_results_for_group},
+                    "pdf_paths": pdf_paths
+                }
+                requests.post(GMAIL_SERVICE_URL, json=gmail_payload)
+                print(f"--- ✉️  Notificación por Gmail enviada para op {operation_id}. ---")
+            except Exception as e:
+                print(f"ADVERTENCIA: Falló el envío de GMAIL para op {operation_id}. Error: {e}")
+            
+            try:
+                trello_payload = {"operation_id": operation_id, "parsed_invoice_data": {"results": parser_results_for_group}, "pdf_paths": pdf_paths, "respaldo_paths": respaldo_paths}
+                requests.post(TRELLO_SERVICE_URL, json=trello_payload)
+            except Exception as e:
+                print(f"ADVERTENCIA: Falló la creación en Trello para op {operation_id}. Error: {e}")
+
+            print(f"--- ✅ Operación {operation_id} para {currency} finalizada con éxito. ---")
+
+        return {
+            "message": f"Proceso finalizado. Se crearon {len(created_operations)} operaciones.",
+            "operations": created_operations
+        }
+
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Error de comunicación con un servicio interno: {e.response.text if e.response else str(e)}"
+        )
+    except Exception as e:
+        print(f"ERROR INESPERADO: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error inesperado en la orquestación: {str(e)}"
+        )
