@@ -12,13 +12,10 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from google.cloud import storage
-
-# --- Importaciones de la aplicación ---
 from database import get_db, engine
 from repository import OperationRepository
 import models
 
-# --- Crear tablas en la BD al iniciar (si no existen) ---
 models.Base.metadata.create_all(bind=engine)
 
 # Cargar variables de entorno del archivo .env
