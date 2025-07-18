@@ -25,7 +25,7 @@ class OperationRepository:
         next_number = int(last_id_today.split('-')[-1]) + 1 if last_id_today else 1
         return f"{id_prefix}{next_number:03d}"
 
-    def save_full_operation(self, operation_id: str, metadata: dict, drive_url: str, invoices_data: List[Dict], cavali_results_map: Dict) -> str:
+    def save_full_operation(self, operation_id: str, metadata: dict, drive_url: str, invoices_data: List[Dict], cavali_results_map: Dict) -> str: 
         if not invoices_data:
             raise ValueError("No se puede guardar una operación sin datos de facturas.")
 
@@ -44,9 +44,8 @@ class OperationRepository:
         porcentajeAdelanto_float = solicitudAdelanto_obj.get('porcentaje', 0)
         cuentas_desembolso_data = metadata.get('cuentasDesembolso', [])
         cuenta_principal = cuentas_desembolso_data[0] if cuentas_desembolso_data else {}
-
         nombre_ejecutivo = email.split('@')[0].replace('.', ' ').title()
-
+        
         db_operacion = Operacion(
             id=operation_id,
             cliente_ruc=primer_cliente.ruc,
@@ -80,7 +79,7 @@ class OperationRepository:
                 moneda=inv.get('currency'),
                 monto_total=inv.get('total_amount'),
                 monto_neto=inv.get('net_amount'),
-                mensaje_cavali=cavali_data.get("message"),
+                mensaje_cavali= cavali_data.get("message"),
                 id_proceso_cavali=cavali_results_map.get("global_process_id") 
             )
             self.db.add(db_factura)

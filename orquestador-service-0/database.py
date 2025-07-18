@@ -8,14 +8,11 @@ from sqlalchemy.ext.declarative import declarative_base
 from dotenv import load_dotenv
 from google.cloud.sql.connector import Connector
 
-# --- CORRECCIÓN CLAVE: Cargar las variables de entorno AQUÍ ---
-# Esto asegura que las variables estén disponibles tan pronto como se importe este archivo.
+
 load_dotenv()
 
-# --- Conector de Cloud SQL ---
 connector = Connector()
 
-# --- Función para obtener la conexión a la base de datos ---
 def get_db_connection():
     """
     Crea y retorna un motor de conexión a la base de datos de Cloud SQL.
@@ -25,7 +22,6 @@ def get_db_connection():
     db_pass = os.getenv("DB_PASS")
     db_name = os.getenv("DB_NAME")
 
-    # Validar que las variables de entorno se hayan cargado
     if not instance_connection_name:
         raise ValueError("La variable de entorno DB_INSTANCE_CONNECTION_NAME no está definida.")
     if not db_user:
@@ -44,13 +40,10 @@ def get_db_connection():
     )
     return engine
 
-# --- Configuración de la Sesión de SQLAlchemy ---
-# Estas líneas ahora se ejecutarán DESPUÉS de que las variables de entorno hayan sido cargadas.
 engine = get_db_connection()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# --- Dependencia para inyectar en las rutas de FastAPI ---
 def get_db():
     """
     Abre y cierra una sesión de base de datos por cada petición.
