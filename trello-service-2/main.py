@@ -1,121 +1,147 @@
-# 8002
-
-from dotenv import load_dotenv
-load_dotenv()
-
-from fastapi import FastAPI, Request, HTTPException
-from datetime import datetime
-from google.cloud import storage
 import os
 import requests
+import datetime
+import json
+from fastapi import FastAPI, Request, HTTPException
+from typing import List, Dict, Any
+from dotenv import load_dotenv
+from google.cloud import storage
+from collections import defaultdict
 
-app = FastAPI()
+# --- Carga de configuración ---
+load_dotenv()
+app = FastAPI(title="Trello Service (con Diagnósticos)")
 
-# Variables de entorno
+# --- Clientes y Variables ---
 TRELLO_API_KEY = os.getenv("TRELLO_API_KEY")
 TRELLO_TOKEN = os.getenv("TRELLO_TOKEN")
-TRELLO_BOARD_ID = os.getenv("TRELLO_BOARD_ID")
 TRELLO_LIST_ID = os.getenv("TRELLO_LIST_ID")
-GCP_BUCKET_NAME = os.getenv("BUCKET_NAME")
 TRELLO_LABEL_VERIFICADA = os.getenv("TRELLO_LABEL_VERIFICADA")
 TRELLO_LABEL_CAVALI = os.getenv("TRELLO_LABEL_CAVALI")
 TRELLO_LABEL_HR = os.getenv("TRELLO_LABEL_HR")
 
-# Cliente de GCS
 storage_client = storage.Client()
 
+# --- Funciones Auxiliares ---
+def _format_number(num: float) -> str:
+    return "{:,.2f}".format(num)
+
+def _sanitize_name(name: str) -> str:
+    return name.strip() if name else "—"
+
 def download_blob_as_bytes(gs_path: str) -> bytes:
+    """Descarga un archivo de GCS como bytes."""
     path_parts = gs_path.replace("gs://", "").split("/", 1)
     bucket_name, blob_path = path_parts[0], path_parts[1]
     bucket = storage_client.bucket(bucket_name)
     blob = bucket.blob(blob_path)
     return blob.download_as_bytes()
 
-def create_trello_card(title: str, description: str) -> str:
-    url = "https://api.trello.com/1/cards"
-    params = {
-        "key": TRELLO_API_KEY,
-        "token": TRELLO_TOKEN,
-        "idList": TRELLO_LIST_ID,
-        "name": title,
-        "desc": description,
-        "idLabels": f"{TRELLO_LABEL_VERIFICADA},{TRELLO_LABEL_CAVALI},{TRELLO_LABEL_HR}"
-    }
-    response = requests.post(url, params=params)
-    print("[TRELLO] Respuesta:", response.text)
-    if response.status_code != 200:
-        raise Exception("Error al crear tarjeta Trello")
-    return response.json()["id"]
+# --- Lógica Principal de Creación de Tarjeta (con Diagnósticos) ---
+def process_operation_and_create_card(payload: Dict[str, Any]):
+    print("--- 1. Iniciando procesamiento de tarjeta ---")
 
-def attach_file_to_card(card_id: str, file_bytes: bytes, filename: str):
-    url = f"https://api.trello.com/1/cards/{card_id}/attachments"
-    params = {
-        "key": TRELLO_API_KEY,
-        "token": TRELLO_TOKEN
-    }
-    files = {
-        "file": (filename, file_bytes)
-    }
-    response = requests.post(url, params=params, files=files)
-    if response.status_code != 200:
-        raise Exception("Error al adjuntar archivo a Trello")
+    # Extraer datos del payload
+    operation_id = payload.get("operation_id")
+    invoices = payload.get("invoices", [])
 
+    # --- LOG DE DIAGNÓSTICO ---
+    if not invoices:
+        print("!!!!!!!! ERROR DE LÓGICA !!!!!!!!")
+        print("La lista de 'invoices' en el payload está vacía. No se creará la tarjeta.")
+        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        return # Termina la función si no hay facturas
+
+    # Extraer el resto de los datos
+    client_name = payload.get("client_name")
+    tasa = payload.get("tasa", "N/A")
+    comision = payload.get("comision", "N/A")
+    drive_folder_url = payload.get("drive_folder_url", "No disponible")
+    attachment_paths = payload.get("attachment_paths", [])
+    
+    invoices_by_currency = defaultdict(list)
+    for inv in invoices:
+        invoices_by_currency[inv.get("currency", "PEN")].append(inv)
+    
+    label_ids_list = [TRELLO_LABEL_VERIFICADA, TRELLO_LABEL_CAVALI, TRELLO_LABEL_HR]
+    id_labels_str = ",".join(filter(None, label_ids_list))
+
+    for currency, invoices_in_group in invoices_by_currency.items():
+        net_total = sum(inv.get("net_amount", 0.0) for inv in invoices_in_group)
+        debtors_info = {inv['debtor_ruc']: inv['debtor_name'] for inv in invoices_in_group}
+        
+        debtors_str = ', '.join(_sanitize_name(name) for name in debtors_info.values() if name) or 'Ninguno'
+        amount_str = f"{currency} {_format_number(net_total)}"
+        current_date = datetime.datetime.now().strftime('%d.%m')
+        
+        card_title = (f"🤖 {current_date} // CLIENTE: {_sanitize_name(client_name)} // DEUDOR: {debtors_str} // MONTO: {amount_str} // OP: {operation_id[:8]}")
+        debtors_markdown = '\n'.join(f"- RUC {ruc}: {_sanitize_name(name)}" for ruc, name in debtors_info.items()) or '- Ninguno'
+        card_description = (
+            f"**ID Operación:** {operation_id}\n\n"
+            f"**Deudores:**\n{debtors_markdown}\n\n"
+            f"**Tasa:** {tasa}\n"
+            f"**Comisión:** {comision}\n"
+            f"**Monto Operación:** {amount_str}\n\n"
+            f"**Carpeta Drive:** {drive_folder_url}"
+        )
+
+        auth_params = {'key': TRELLO_API_KEY, 'token': TRELLO_TOKEN}
+        card_payload = {
+            'idList': TRELLO_LIST_ID,
+            'name': card_title,
+            'desc': card_description,
+            'idLabels': id_labels_str
+        }
+        
+        # --- LOG DE DIAGNÓSTICO ---
+        print("\n--- 2. Preparando para llamar a la API de Trello ---")
+        print(f"    URL: https://api.trello.com/1/cards")
+        print(f"    API Key: {str(TRELLO_API_KEY)[:4]}... (oculto)")
+        print(f"    List ID: {TRELLO_LIST_ID}")
+        print(f"    Card Title: {card_title}")
+        print("---------------------------------------------------\n")
+
+        url_card = "https://api.trello.com/1/cards"
+        response = requests.post(url_card, params=auth_params, json=card_payload)
+        
+        # Esta línea es crucial. Si Trello devuelve un error, detendrá el programa aquí.
+        response.raise_for_status() 
+        
+        card_id = response.json()["id"]
+        print(f"--- 3. Tarjeta creada exitosamente con ID: {card_id} ---")
+
+        # Lógica para adjuntar archivos
+        url_attachment = f"https://api.trello.com/1/cards/{card_id}/attachments"
+        for path in attachment_paths:
+            try:
+                file_bytes = download_blob_as_bytes(path)
+                filename = os.path.basename(path)
+                files = {"file": (filename, file_bytes)}
+                requests.post(url_attachment, params=auth_params, files=files)
+            except Exception as e:
+                print(f"ADVERTENCIA: No se pudo adjuntar el archivo {path}. Error: {e}")
+
+# --- Endpoint HTTP ---
 @app.post("/trello")
-async def create_trello_card_endpoint(request: Request):
+async def handle_trello_request(request: Request):
     try:
         payload = await request.json()
-        print("[TRELLO] Payload recibido:", payload)
+        # Log del payload completo que se recibe
+        print("\n--- PAYLOAD RECIBIDO EN TRELLO SERVICE ---")
+        print(json.dumps(payload, indent=2))
+        print("------------------------------------------\n")
+        
+        process_operation_and_create_card(payload)
+        return {"status": "SUCCESS", "message": "Proceso de Trello iniciado."}
 
-        op_id = payload.get("operation_id")
-        pdf_paths = payload.get("pdf_paths", [])
-        respaldo_paths = payload.get("respaldo_paths", [])
-        tasa = payload.get("tasa", "-")
-        comision = payload.get("comision", "-")
-
-        parser_result = payload.get("parsed_invoice_data", {})
-        results = parser_result.get("results", [])
-        if not results:
-            raise HTTPException(status_code=400, detail="No se encontraron resultados en parsed_invoice_data")
-
-        # Agrupar por moneda
-        grouped_by_currency = {}
-        for result in results:
-            data = result["parsed_invoice_data"]
-            currency = data.get("currency", "PEN")
-            if currency not in grouped_by_currency:
-                grouped_by_currency[currency] = []
-            grouped_by_currency[currency].append(data)
-
-        responses = []
-
-        for currency, docs in grouped_by_currency.items():
-            net_total = sum(doc.get("net_amount", 0.0) for doc in docs)
-            debtor_set = set((doc.get("debtor_ruc"), doc.get("debtor_name")) for doc in docs)
-            debtor_lines = [f"RUC {ruc}: {name}" for ruc, name in debtor_set]
-            parsed = docs[0]
-
-            title = f"🤖 {datetime.today().strftime('%d.%m')} // CLIENTE: {parsed['client_name']} // DEUDOR: {parsed['debtor_name']} // {currency} EN {net_total:,.2f} // OP: {op_id}"
-            description = f"ID Operación: {op_id}\nDeudores:\n\n" + "\n".join(debtor_lines) + f"\n\nTasa: {tasa}%\nComisión: {comision}\nMonto Operación: {currency} {net_total:,.2f}"
-
-            card_id = create_trello_card(title, description)
-
-            for path in pdf_paths + respaldo_paths:
-                try:
-                    file_bytes = download_blob_as_bytes(path)
-                    filename = os.path.basename(path)
-                    attach_file_to_card(card_id, file_bytes, filename)
-                except Exception as e:
-                    print(f"[TRELLO] Error adjuntando {path}: {e}")
-
-            responses.append({
-                "status": "ok",
-                "currency": currency,
-                "title": title,
-                "card_id": card_id
-            })
-
-        return responses
-
+    except requests.exceptions.HTTPError as e:
+        # Este bloque se activará si raise_for_status() falla
+        print(f"!!!!!!!! ERROR DE API TRELLO !!!!!!!!")
+        print(f"Status Code: {e.response.status_code}")
+        print(f"Respuesta de Trello: {e.response.text}")
+        print(f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        raise HTTPException(status_code=e.response.status_code, detail=f"Error de API Trello: {e.response.text}")
     except Exception as e:
-        print("[TRELLO] Error inesperado:", str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")

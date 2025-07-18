@@ -20,11 +20,19 @@ load_dotenv()
 # --- Configuración ---
 USER_TOKEN_FILE = 'token.json'
 SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-RECIPIENT_EMAIL = os.getenv("GMAIL_RECIPIENT") # El destinatario fijo del correo
 SENDER_USER_ID = 'kevin.gianecchine@capitalexpress.cl'
 SCOPES = ['https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/devstorage.read_only']
 
-app = FastAPI(title="Servicio de Gmail Híbrido")
+# Lista fija de correos que siempre recibirán una copia
+FIXED_CC_LIST = [
+    'kevin.gianecchine@capitalexpress.cl',
+    'jenssy.huaman@capitalexpress.pe',
+    'jakeline.quispe@capitalexpress.pe',
+    'jhonny.celay@capitalexpress.pe',
+    'kevin.tupac@capitalexpress.cl'
+]
+
+app = FastAPI(title="Servicio de Gmail Híbrido Avanzado")
 
 class InvoiceData(BaseModel):
     document_id: Optional[str] = None
@@ -58,7 +66,7 @@ def get_storage_client():
     return storage.Client(credentials=sa_creds)
 
 # --- Función para Crear el HTML ---
-def create_html_body(invoice_data_list: List[InvoiceData], emails_to_display: str) -> str:
+def create_html_body(invoice_data_list: List[InvoiceData]) -> str:
     if not invoice_data_list:
         return "<p>No hay datos de facturas para procesar.</p>"
 
@@ -82,15 +90,6 @@ def create_html_body(invoice_data_list: List[InvoiceData], emails_to_display: st
     
     display_columns = ['RUC Deudor', 'Nombre Deudor', 'Documento', 'Monto Factura', 'Monto Neto', 'Fecha de Pago']
     tabla_html = df_display[display_columns].to_html(index=False, border=1, justify='left', classes='invoice_table')
-
-    # Sección para mostrar los correos obtenidos del Excel
-    correos_html_section = ""
-    if emails_to_display:
-        correos_html_section = f"""
-        <p style="margin-top: 25px; border-top: 1px solid #ccc; padding-top: 15px; font-style: italic; color: #555;">
-            <strong>Correos de Verificación (obtenidos del Excel):</strong> {emails_to_display}
-        </p>
-        """
 
     mensaje_html = f"""
     <!DOCTYPE html>
@@ -124,9 +123,6 @@ def create_html_body(invoice_data_list: List[InvoiceData], emails_to_display: st
             </p>
             {tabla_html}
             <p>Agradecemos de antemano su pronta respuesta. Con su confirmación, procederemos a la anotación en cuenta en CAVALI.</p>
-            
-            {correos_html_section}
-            
             <p class="disclaimer">"Sin perjuicio de lo anteriormente mencionado, nos permitimos recordarles que toda acción tendiente a simular la emisión de la referida factura negociable o letra para obtener un beneficio a título personal o a favor de la otra parte de la relación comercial, teniendo pleno conocimiento de que la misma no proviene de una relación comercial verdadera, se encuentra sancionada penalmente como delito de estafa en nuestro ordenamiento jurídico.
             <br>Asimismo, en caso de que vuestra representada cometa un delito de forma conjunta y/o en contubernio con el emitente de la factura, dicha acción podría tipificarse como delito de asociación ilícita para delinquir, según el artículo 317 del Código Penal, por lo que nos reservamos el derecho de iniciar las acciones penales correspondientes en caso resulte necesario."</p>
         </div>
@@ -147,12 +143,21 @@ async def send_verification_email(request: Request):
         pdf_paths = data.get("pdf_paths", [])
         parser_results = data.get("parsed_invoice_data", {}).get("results", [])
         
-        # Esta variable se usa para mostrar los correos en el cuerpo del mensaje
-        emails_to_display = data.get("recipient_emails")
+        # --- Lógica de Destinatarios ---
+        emails_from_excel = data.get("recipient_emails")
+        user_email = data.get("user_email")
 
-        if not parser_results or not RECIPIENT_EMAIL:
-            return {"status": "SKIPPED", "message": "Faltan datos de parser o destinatario fijo no configurado."}
+        if not parser_results or not emails_from_excel:
+            return {"status": "SKIPPED", "message": "Faltan datos de parser o correos del Excel."}
 
+        # Construir la lista final de CC
+        cc_list = set(FIXED_CC_LIST)
+        if user_email:
+            cc_list.add(user_email)
+        
+        cc_string = ",".join(sorted(list(cc_list)))
+
+        # Procesar facturas
         invoice_models = [InvoiceData(**res['parsed_invoice_data']) for res in parser_results if res.get('status') == 'SUCCESS']
         if not invoice_models:
             return {"status": "SKIPPED", "message": "No hay facturas válidas para enviar."}
@@ -162,14 +167,14 @@ async def send_verification_email(request: Request):
             facturas_por_deudor[invoice.debtor_ruc].append(invoice)
 
         for ruc_deudor, facturas_grupo in facturas_por_deudor.items():
-            # Pasamos los correos a la función que crea el cuerpo del mensaje
-            html_body = create_html_body(facturas_grupo, emails_to_display)
+            html_body = create_html_body(facturas_grupo)
 
             message = EmailMessage()
             message.add_alternative(html_body, subtype='html')
             
-            # El destinatario es ahora el valor fijo configurado en el .env
-            message['To'] = RECIPIENT_EMAIL
+            # Asignación de Destinatarios
+            message['To'] = emails_from_excel
+            message['Cc'] = cc_string
             message['Subject'] = f"Confirmación de Facturas Negociables - {facturas_grupo[0].client_name}"
 
             # Adjuntar archivos PDF
@@ -186,10 +191,11 @@ async def send_verification_email(request: Request):
             encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
             create_message_request = {'raw': encoded_message}
             gmail_service.users().messages().send(userId=SENDER_USER_ID, body=create_message_request).execute()
-            print(f"Correo para deudor {ruc_deudor} enviado a {RECIPIENT_EMAIL}")
+            print(f"Correo para deudor {ruc_deudor} enviado a: {emails_from_excel} con CC a: {cc_string}")
 
-        return {"status": "SUCCESS", "message": f"Se han enviado {len(facturas_por_deudor)} correos de notificación."}
+        return {"status": "SUCCESS", "message": "Correos de notificación enviados."}
 
     except Exception as e:
-        print(f"ERROR: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error interno en el servicio de Gmail: {str(e)}")

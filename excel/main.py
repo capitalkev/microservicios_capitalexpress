@@ -4,20 +4,18 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 
-# --- Modelo de Datos de Entrada (Actualizado) ---
+# --- Modelo de Datos de Entrada ---
 class Contacto(BaseModel):
     ruc: str
     correo: str
-    nombre_deudor: Optional[str] = None # Es opcional por si solo se actualiza
+    nombre_deudor: Optional[str] = None
 
-# --- Inicialización ---
+# --- Inicialización de FastAPI y Google Sheets ---
 app = FastAPI(
-    title="Microservicio de Google Sheets",
+    title="Microservicio de Google Sheets (Versión Estable)",
     description="Actualiza o crea contactos de deudores en una hoja de cálculo."
 )
 
-# --- Autenticación ---
-# Lee la ruta del archivo desde una variable de entorno
 credentials_file = os.getenv("GOOGLE_SHEETS_CREDENTIALS")
 if not credentials_file:
     raise RuntimeError("La variable de entorno GOOGLE_SHEETS_CREDENTIALS no está definida.")
@@ -30,76 +28,67 @@ except Exception as e:
     raise RuntimeError(f"No se pudo inicializar Google Sheets: {e}")
 
 
-@app.post("/update-contact", summary="Actualizar o Crear Contacto en Google Sheets")
+# --- Endpoints ---
+
+@app.post("/update-contact", summary="Actualizar o Crear Contacto")
 def update_contact(contacto: Contacto):
     """
-    Busca un RUC en la columna 1.
-    - Si lo encuentra, actualiza la lista de correos en la columna 3.
-    - Si no lo encuentra, añade una nueva fila con RUC, Nombre y Correo.
+    Busca un RUC. Si lo encuentra, actualiza los correos. Si no, crea una nueva fila.
     """
     try:
-        # Obtenemos todos los valores de la hoja de una sola vez para ser más eficientes
+        # Método estable: Obtener todos los valores y buscar en memoria.
         all_rows = worksheet.get_all_values()
         
-        # Iteramos sobre cada fila para buscar el RUC
         for i, row in enumerate(all_rows):
-            # Comparamos el RUC en la primera columna (índice 0)
+            # Compara el RUC en la primera columna (índice 0)
             if row and row[0] == contacto.ruc:
                 fila_num = i + 1  # Las filas en gspread son 1-indexadas
-                print(f"RUC {contacto.ruc} encontrado en la fila {fila_num}. Actualizando correos.")
                 
                 # --- LÓGICA SI EL RUC YA EXISTE ---
                 correos_actuales_str = worksheet.cell(fila_num, 3).value or ""
                 correo_nuevo = contacto.correo.strip()
                 
                 if not correo_nuevo:
-                    return {"status": "SUCCESS", "message": "RUC encontrado, pero no se proporcionó correo para actualizar."}
+                    return {"status": "SUCCESS", "message": "RUC encontrado, sin correo nuevo para añadir."}
 
-                # Evitar duplicados
                 lista_de_correos = {c.strip() for c in correos_actuales_str.split(';') if c.strip()}
                 if correo_nuevo in lista_de_correos:
-                    return {"status": "SUCCESS", "message": f"El correo '{correo_nuevo}' ya existía para el RUC {contacto.ruc}."}
+                    return {"status": "SUCCESS", "message": f"El correo '{correo_nuevo}' ya existía."}
                 
                 lista_de_correos.add(correo_nuevo)
                 correos_actualizados = ";".join(sorted(lista_de_correos))
                 worksheet.update_cell(fila_num, 3, correos_actualizados)
 
-                return {"status": "SUCCESS", "message": f"Contacto para RUC {contacto.ruc} actualizado exitosamente."}
+                return {"status": "SUCCESS", "message": f"Contacto para RUC {contacto.ruc} actualizado."}
 
-        # --- LÓGICA SI EL RUC NO SE ENCONTRÓ (el bucle for terminó) ---
-        print(f"RUC {contacto.ruc} no encontrado. Creando nueva fila.")
-        
+        # --- LÓGICA SI EL RUC NO SE ENCONTRÓ ---
         if not contacto.nombre_deudor:
             raise HTTPException(
                 status_code=400, 
-                detail=f"El RUC '{contacto.ruc}' no existe y no se proporcionó 'nombre_deudor' para crearlo."
+                detail=f"RUC '{contacto.ruc}' no existe y se necesita 'nombre_deudor' para crearlo."
             )
             
-        nueva_fila = [
-            contacto.ruc,
-            contacto.nombre_deudor,
-            contacto.correo.strip()
-        ]
+        nueva_fila = [contacto.ruc, contacto.nombre_deudor, contacto.correo.strip()]
         worksheet.append_row(nueva_fila)
         
-        return {"status": "CREATED", "message": f"Nuevo contacto para RUC {contacto.ruc} creado exitosamente."}
+        return {"status": "CREATED", "message": f"Nuevo contacto para RUC {contacto.ruc} creado."}
 
     except Exception as e:
-        # Captura cualquier otro error inesperado
-        print(f"ERROR: Ocurrió un error inesperado: {e}")
-        raise HTTPException(status_code=500, detail=f"Error inesperado al procesar la hoja de cálculo: {str(e)}")
+        print(f"ERROR: {e}")
+        raise HTTPException(status_code=500, detail=f"Error inesperado en excel-service: {str(e)}")
+
 
 @app.get("/get-emails/{ruc}", summary="Obtener correos de un RUC")
 def get_emails(ruc: str):
     """
-    Busca un RUC en la hoja y devuelve la cadena de correos asociada.
+    Busca un RUC y devuelve la cadena de correos asociada.
     """
     try:
-        celda_encontrada = worksheet.find(ruc, in_column=1)
-        # Lee el valor de la columna 3 (correos) en la fila encontrada
-        correos = worksheet.cell(celda_encontrada.row, 3).value or ""
+        celda = worksheet.find(ruc, in_column=1)
+        correos = worksheet.cell(celda.row, 3).value or ""
         return {"ruc": ruc, "emails": correos}
     except gspread.exceptions.CellNotFound:
-        raise HTTPException(status_code=404, detail=f"No se encontró el RUC '{ruc}' para obtener correos.")
+        raise HTTPException(status_code=404, detail=f"No se encontró el RUC '{ruc}'.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error inesperado al obtener correos: {str(e)}")
+

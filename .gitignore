@@ -38,3 +38,4 @@ Thumbs.db
 
 # Evitar subir este mismo .gitignore si se desea
 .gitignore
+cmd.txt
