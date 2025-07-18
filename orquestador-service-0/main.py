@@ -174,7 +174,7 @@ async def submit_multi_currency_operation(
                 metadata, 
                 drive_folder_url, 
                 invoices_in_group,
-                cavali_results_json  # Pasa el resultado de Cavali
+                cavali_results_json
             )
 
             created_operations.append({
@@ -190,7 +190,6 @@ async def submit_multi_currency_operation(
                 ruc_deudor_grupo = invoices_in_group[0]['debtor_ruc']
                 destinatarios_para_enviar = correos_finales_por_ruc.get(ruc_deudor_grupo)
                 
-                # --- CORRECCIÓN: Extraer el email del usuario ---
                 user_email = metadata.get('user_email', None)
 
                 if destinatarios_para_enviar:
@@ -198,9 +197,9 @@ async def submit_multi_currency_operation(
                         "parsed_invoice_data": {"results": parser_results_for_group},
                         "pdf_paths": pdf_paths,
                         "recipient_emails": destinatarios_para_enviar,
-                        "user_email": user_email # <-- Se añade el nuevo campo
+                        "user_email": user_email
                     }
-                    requests.post(GMAIL_SERVICE_URL, json=gmail_payload).raise_for_status()
+                    #requests.post(GMAIL_SERVICE_URL, json=gmail_payload).raise_for_status()
                     print(f"--- ✉️  Notificación por Gmail enviada para op {operation_id}. ---")
                 else:
                     print(f"ADVERTENCIA: No se enviarán correos para op {operation_id} porque no se encontraron correos para RUC {ruc_deudor_grupo}.")
@@ -210,41 +209,23 @@ async def submit_multi_currency_operation(
                 
             # Lógica para TRELLO
             try:
-                # 1. Simplificar la lista de facturas para el payload
-                invoices_for_trello = [
-                    {
-                        "currency": inv.get("currency"),
-                        "net_amount": inv.get("net_amount"),
-                        "debtor_ruc": inv.get("debtor_ruc"),
-                        "debtor_name": inv.get("debtor_name")
-                    } for inv in invoices_in_group
-                ]
-
-                # 2. Construir el payload con todos los datos en crudo
                 trello_payload = {
                     "operation_id": operation_id,
                     "client_name": invoices_in_group[0].get('client_name'),
                     "tasa": metadata.get('tasaOperacion', 'N/A'),
                     "comision": metadata.get('comision', 'N/A'),
                     "drive_folder_url": drive_folder_url,
-                    "invoices": invoices_for_trello,
+                    "invoices": invoices_in_group,
                     "attachment_paths": pdf_paths + respaldo_paths,
-                    "cavali_results": cavali_results_json
+                    "cavali_results": cavali_results_json,
+                    "user_email": user_email
                 }
-
-                # 3. Enviar el payload y verificar la respuesta
-                response = requests.post(TRELLO_SERVICE_URL, json=trello_payload)
-                response.raise_for_status() 
-                print(f"--- ✅ Notificación por Trello enviada. Respuesta: {response.json()} ---")
-
-            except requests.exceptions.HTTPError as e:
-                print(f"!!!!!!!! ERROR DE TRELLO !!!!!!!!")
-                print(f"El servicio de Trello devolvió un error para la op {operation_id}.")
-                print(f"Status Code: {e.response.status_code}")
-                print(f"Respuesta: {e.response.text}")
-                print(f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+                requests.post(TRELLO_SERVICE_URL, json=trello_payload)
+                print(f"--- 🚀 Notificación a Trello enviada para op {operation_id}. ---")
             except Exception as e:
-                print(f"ADVERTENCIA: Falló el envío a Trello para op {operation_id}. Error general: {e}")
+                print(f"ADVERTENCIA: Falló la creación en Trello para op {operation_id}. Error: {e}")
+
+            print(f"--- ✅ Operación {operation_id} para {currency} finalizada con éxito. ---")
 
 
         return {
