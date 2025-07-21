@@ -80,7 +80,7 @@ class OperationRepository:
                 monto_total=inv.get('total_amount'),
                 monto_neto=inv.get('net_amount'),
                 mensaje_cavali= cavali_data.get("message"),
-                id_proceso_cavali=cavali_results_map.get("global_process_id") 
+                id_proceso_cavali=cavali_data.get("process_id") 
             )
             self.db.add(db_factura)
             

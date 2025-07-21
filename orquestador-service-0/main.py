@@ -160,7 +160,7 @@ async def submit_multi_currency_operation(
                 print("--- ✅ Validación en CAVALI completada ---")
             except requests.exceptions.RequestException as e:
                 print(f"⚠️ Alerta: Falló la comunicación con el servicio de CAVALI. Error: {e}")
-
+            print(f"------------------Resultados de CAVALI: {cavali_results_json}")
             # 5.2. Generar ID y Archivar en Drive
             operation_id = repo.generar_siguiente_id_operacion()
             drive_response = requests.post(DRIVE_SERVICE_URL, json={"operation_id": operation_id, "gcs_file_paths": all_gcs_paths})
