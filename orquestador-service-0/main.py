@@ -199,14 +199,23 @@ async def submit_multi_currency_operation(
                         "recipient_emails": destinatarios_para_enviar,
                         "user_email": user_email
                     }
-                    #requests.post(GMAIL_SERVICE_URL, json=gmail_payload).raise_for_status()
+                    requests.post(GMAIL_SERVICE_URL, json=gmail_payload).raise_for_status()
                     print(f"--- ✉️  Notificación por Gmail enviada para op {operation_id}. ---")
                 else:
                     print(f"ADVERTENCIA: No se enviarán correos para op {operation_id} porque no se encontraron correos para RUC {ruc_deudor_grupo}.")
             except Exception as e:
                 print(f"ADVERTENCIA: Falló el envío de GMAIL para op {operation_id}. Error: {e}")
 
-                
+            cuentas_desembolso_data = metadata.get('cuentasDesembolso', [])
+            cuenta_principal = cuentas_desembolso_data[0] if cuentas_desembolso_data else {}
+            ## Lógica para Trello
+            desembolso_banco = cuenta_principal.get('banco'),
+            desembolso_tipo = cuenta_principal.get('tipo'),
+            desembolso_moneda = cuenta_principal.get('moneda'),
+            desembolso_numero = cuenta_principal.get('numero')
+            solicitudAdelanto_obj = metadata.get('solicitudAdelanto', {})
+            porcentajeAdelanto = solicitudAdelanto_obj.get('porcentaje', 0)
+            
             # Lógica para TRELLO
             try:
                 trello_payload = {
@@ -218,7 +227,12 @@ async def submit_multi_currency_operation(
                     "invoices": invoices_in_group,
                     "attachment_paths": pdf_paths + respaldo_paths,
                     "cavali_results": cavali_results_json,
-                    "user_email": user_email
+                    "user_email": user_email,
+                    "porcentajeAdelanto": porcentajeAdelanto,
+                    "desembolso_numero": desembolso_numero,
+                    "desembolso_moneda": desembolso_moneda,
+                    "desembolso_tipo": desembolso_tipo,
+                    "desembolso_banco": desembolso_banco
                 }
                 requests.post(TRELLO_SERVICE_URL, json=trello_payload)
                 print(f"--- 🚀 Notificación a Trello enviada para op {operation_id}. ---")

@@ -25,9 +25,11 @@ storage_client = storage.Client()
 
 # --- Funciones Auxiliares ---
 def _format_number(num: float) -> str:
+    """Formatea un número a dos decimales con separador de miles."""
     return "{:,.2f}".format(num)
 
 def _sanitize_name(name: str) -> str:
+    """Limpia y formatea un nombre para mostrar."""
     return name.strip() if name else "—"
 
 def download_blob_as_bytes(gs_path: str) -> bytes:
@@ -52,13 +54,18 @@ def process_operation_and_create_card(payload: Dict[str, Any]):
     client_name = payload.get("client_name")
     tasa = payload.get("tasa", "N/A")
     comision = payload.get("comision", "N/A")
-    drive_folder_url = payload.get("drive_folder_url", "No disponible")
+    drive_folder_url = payload.get("drive_folder_url", "")
     attachment_paths = payload.get("attachment_paths", [])
     cavali_results = payload.get("cavali_results", {})
     email = payload.get("user_email", "No disponible")
     nombre_ejecutivo = email.split('@')[0].replace('.', ' ').title()
     siglas_nombre = ''.join([palabra[0] for palabra in nombre_ejecutivo.split()]).upper()
 
+    porcentajeAdelanto = payload.get("porcentajeAdelanto", 0)
+    desembolso_numero = payload.get("desembolso_numero", "N/A")
+    desembolso_moneda = payload.get("desembolso_moneda", "N/A")
+    desembolso_tipo = payload.get("desembolso_tipo", "N/A")
+    desembolso_banco = payload.get("desembolso_banco", "N/A")
 
     invoices_by_currency = defaultdict(list)
     for inv in invoices:
@@ -75,29 +82,66 @@ def process_operation_and_create_card(payload: Dict[str, Any]):
         current_date = datetime.datetime.now().strftime('%d.%m')
         
         card_title = (f"🤖 {current_date} // CLIENTE: {_sanitize_name(client_name)} // DEUDOR: {debtors_str} // MONTO: {amount_str} // {siglas_nombre}// OP: ")
+        
+        # Formato de deudores como en la imagen
         debtors_markdown = '\n'.join(f"- RUC {ruc}: {_sanitize_name(name)}" for ruc, name in debtors_info.items()) or '- Ninguno'
         
-        # --- LÓGICA CORREGIDA ---
         cavali_status_lines = []
         for inv in invoices_in_group:
-            # Clave de búsqueda: el nombre del archivo XML
             lookup_key = inv.get('xml_filename', 'ID no encontrado') 
             doc_id = inv.get('document_id', 'N/A')
             cavali_info = cavali_results.get(lookup_key, {}) 
             cavali_message = cavali_info.get("message", "Respuesta no disponible")
-            cavali_status_lines.append(f"- {doc_id}: {cavali_message}")
-        
-        cavali_markdown = "\n".join(cavali_status_lines)
 
-        card_description = (
-            f"**ID Operación:** {operation_id}\n\n"
-            f"**Deudores:**\n{debtors_markdown}\n\n"
-            f"**Tasa:** {tasa}\n"
-            f"**Comisión:** {comision}\n"
-            f"**Monto Operación:** {amount_str}\n\n"
-            f"**Carpeta Drive:** {drive_folder_url}\n\n"
-            f"**Estado CAVALI:**\n{cavali_markdown}\n\n"
-        )
+            cavali_status_lines.append(f"- {doc_id}: *{cavali_message}*")
+        
+        cavali_markdown = "\n".join(cavali_status_lines) if cavali_status_lines else "- No se procesó en Cavali."
+
+        card_description_anticipo = f"""
+# ANTICIPO PROPUESTO: {porcentajeAdelanto} %
+
+**ID Operación:** {operation_id}
+
+**Deudores:**
+{debtors_markdown}
+
+**Tasa:** {tasa}
+**Comisión:** {comision}
+**Monto Operación:** {amount_str}
+**Carpeta Drive:** [Abrir en Google Drive]({drive_folder_url})
+
+### CAVALI:
+{cavali_markdown}
+
+### Cuenta bancaria:
+- **Banco:** {desembolso_banco}
+- **N°cuenta:** {desembolso_numero}
+- **Tipo cuenta:** {desembolso_tipo}
+"""
+        
+        card_description_sin_anticipo = f"""
+
+**ID Operación:** {operation_id}
+
+**Deudores:**
+{debtors_markdown}
+
+**Tasa:** {tasa}
+**Comisión:** {comision}
+**Monto Operación:** {amount_str}
+**Carpeta Drive:** [Abrir en Google Drive]({drive_folder_url})
+
+### CAVALI:
+{cavali_markdown}
+### Cuenta bancaria:
+- **Banco:** {desembolso_banco}
+- **N°cuenta:** {desembolso_numero}
+- **Tipo cuenta:** {desembolso_tipo}
+"""
+        if porcentajeAdelanto > 0:
+            card_description = card_description_anticipo
+        else:            
+            card_description = card_description_sin_anticipo
 
         auth_params = {'key': TRELLO_API_KEY, 'token': TRELLO_TOKEN}
         card_payload = {
