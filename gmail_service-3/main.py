@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from collections import defaultdict
 from pydantic import BaseModel
 from typing import List, Optional
-
+from datetime import datetime
 # --- Importaciones de Google ---
 from google.cloud import storage
 from google.oauth2.credentials import Credentials
@@ -78,18 +78,18 @@ def get_storage_client():
     return storage.Client(credentials=sa_creds)
 
 # --- Función para crear el Excel de Gloria ---
-def create_gloria_excel(invoice_data_list: List[InvoiceData]) -> (str, bytes):
+def create_gloria_excel(invoice_data_list: List[InvoiceData]) -> (str, bytes): # type: ignore
     if not invoice_data_list:
         return None, None
     first_invoice = invoice_data_list[0]
     proveedores_juntos = '\n'.join(sorted(list(set(inv.debtor_name for inv in invoice_data_list if inv.debtor_name))))
     data = {
-        'FACTOR': [first_invoice.client_name],
+        'FACTOR': 20603596294,
         'FECHA DE ENVIO': [pd.to_datetime('today').strftime('%d/%m/%Y')],
-        'RUC PROVEEDOR': ['\n'.join(inv.debtor_ruc for inv in invoice_data_list)],
-        'PROVEEDOR': [proveedores_juntos],
-        'RUC CLIENTE': [first_invoice.client_ruc],
-        'CLIENTE': [first_invoice.client_name],
+        'RUC PROVEEDOR': [first_invoice.client_ruc],
+        'PROVEEDOR': [first_invoice.client_name],
+        'RUC CLIENTE': ['\n'.join(inv.debtor_ruc for inv in invoice_data_list)],
+        'CLIENTE': [proveedores_juntos],
         'FECHA DE EMISION': [pd.to_datetime(first_invoice.issue_date, errors='coerce').strftime('%d/%m/%Y')],
         'NUM FACTURA': ['\n'.join(inv.document_id for inv in invoice_data_list)],
         'IMPORTE NETO PAGAR': [sum(inv.net_amount for inv in invoice_data_list)],
@@ -131,7 +131,9 @@ def create_gloria_excel(invoice_data_list: List[InvoiceData]) -> (str, bytes):
             cell.number_format = '#,##0.00'
             cell.alignment = right_alignment
     excel_bytes = output_buffer.getvalue()
-    filename = f"Facturas_{first_invoice.client_name.replace(' ', '_')}.xlsx"
+    today = datetime.now()
+    date_str = today.strftime("%d%m%Y")
+    filename = f"CapitalExpress_{date_str}.xlsx"
     return filename, excel_bytes
 
 # --- Función para Crear el HTML ---
@@ -226,7 +228,6 @@ async def send_verification_email(request: Request):
             message = EmailMessage()
             client_name = facturas_grupo[0].client_name
 
-            # 1. Crear el cuerpo HTML (siempre es el mismo)
             html_body = create_html_body(facturas_grupo)
             message.add_alternative(html_body, subtype='html')
             
@@ -235,7 +236,6 @@ async def send_verification_email(request: Request):
             if ruc_deudor in RUC_GLORIA:
                 excel_filename, excel_bytes = create_gloria_excel(facturas_grupo)
                 
-                # PASO 2: Verificar si el archivo se generó en memoria
                 if excel_bytes:
                     print(f"DEBUG: Archivo Excel CREADO para DEUDOR '{ruc_deudor}'. Tamaño: {len(excel_bytes)} bytes. Adjuntando...")
                     message.add_attachment(excel_bytes,
@@ -245,7 +245,6 @@ async def send_verification_email(request: Request):
                 else:
                     print(f"ERROR: La función create_gloria_excel no devolvió datos para adjuntar.")
             
-            # 3. Asignar destinatarios y asunto
             message['To'] = emails_from_excel
             message['Cc'] = cc_string
             message['Subject'] = f"Confirmación de Facturas Negociables - {client_name}"
@@ -260,7 +259,6 @@ async def send_verification_email(request: Request):
                 except Exception as e:
                     print(f"ADVERTENCIA al adjuntar {pdf_path}: {e}")
 
-            # 5. Enviar el correo
             encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
             gmail_service.users().messages().send(
                 userId=SENDER_USER_ID, body={'raw': encoded_message}
