@@ -79,61 +79,81 @@ def get_storage_client():
 
 # --- Función para crear el Excel de Gloria ---
 def create_gloria_excel(invoice_data_list: List[InvoiceData]) -> (str, bytes): # type: ignore
+    """
+    Genera un archivo Excel para Gloria con una fila por cada factura
+    y con el formato de nombre 'CapitalExpress_DDMMYYYY.xlsx'.
+    """
     if not invoice_data_list:
         return None, None
-    first_invoice = invoice_data_list[0]
-    proveedores_juntos = '\n'.join(sorted(list(set(inv.debtor_name for inv in invoice_data_list if inv.debtor_name))))
-    data = {
-        'FACTOR': 20603596294,
-        'FECHA DE ENVIO': [pd.to_datetime('today').strftime('%d/%m/%Y')],
-        'RUC PROVEEDOR': [first_invoice.client_ruc],
-        'PROVEEDOR': [first_invoice.client_name],
-        'RUC CLIENTE': ['\n'.join(inv.debtor_ruc for inv in invoice_data_list)],
-        'CLIENTE': [proveedores_juntos],
-        'FECHA DE EMISION': [pd.to_datetime(first_invoice.issue_date, errors='coerce').strftime('%d/%m/%Y')],
-        'NUM FACTURA': ['\n'.join(inv.document_id for inv in invoice_data_list)],
-        'IMPORTE NETO PAGAR': [sum(inv.net_amount for inv in invoice_data_list)],
-        'MONEDA': [first_invoice.currency],
-        'FECHA DE VENCIMIENTO': [pd.to_datetime(first_invoice.due_date, errors='coerce').strftime('%d/%m/%Y')]
-    }
-    df = pd.DataFrame(data)
+
+    # 1. Crear una lista de diccionarios (una fila por factura)
+    data_rows = []
+    for invoice in invoice_data_list:
+        row = {
+            'FACTOR': 20603596294,  # Se mantiene el valor fijo de tu código anterior
+            'FECHA DE ENVIO': pd.to_datetime('today').strftime('%d/%m/%Y'),
+            'RUC PROVEEDOR': invoice.debtor_ruc,
+            'PROVEEDOR': invoice.debtor_name,
+            'RUC CLIENTE': invoice.client_ruc,
+            'CLIENTE': invoice.client_name,
+            'FECHA DE EMISION': pd.to_datetime(invoice.issue_date, errors='coerce').strftime('%d/%m/%Y'),
+            'NUM FACTURA': invoice.document_id,
+            'IMPORTE NETO PAGAR': invoice.net_amount,
+            'MONEDA': invoice.currency,
+            'FECHA DE VENCIMIENTO': pd.to_datetime(invoice.due_date, errors='coerce').strftime('%d/%m/%Y')
+        }
+        data_rows.append(row)
+
+    # 2. Crear un DataFrame a partir de la lista de filas
+    df = pd.DataFrame(data_rows)
+    
+    # 3. Crear el Excel en memoria y aplicar estilos
     output_buffer = io.BytesIO()
     with pd.ExcelWriter(output_buffer, engine='openpyxl') as writer:
         df.to_excel(writer, sheet_name='Facturas', index=False)
         worksheet = writer.sheets['Facturas']
+
+        # Definición de estilos
         header_font = Font(bold=True, color="FFFFFF")
         header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
         thin_border_side = Side(border_style="thin", color="000000")
         cell_border = Border(left=thin_border_side, right=thin_border_side, top=thin_border_side, bottom=thin_border_side)
         center_alignment = Alignment(horizontal='center', vertical='center')
         right_alignment = Alignment(horizontal='right', vertical='center')
-        wrap_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
         for row in worksheet.iter_rows():
             for cell in row:
                 cell.border = cell_border
                 cell.alignment = center_alignment
+        
         for cell in worksheet[1]:
             cell.font = header_font
             cell.fill = header_fill
+
+        # Ajuste de anchos y formatos
         for col_idx, column_cells in enumerate(worksheet.columns, 1):
             max_length = 0
             column_letter = get_column_letter(col_idx)
             for cell in column_cells:
-                if column_letter in ['C', 'D', 'H'] and not cell.row == 1:
-                    cell.alignment = wrap_alignment
-                if '\n' in str(cell.value):
-                    max_length = max(len(line) for line in str(cell.value).split('\n'))
-                elif len(str(cell.value)) > max_length:
-                    max_length = len(str(cell.value))
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
             adjusted_width = (max_length + 2)
             worksheet.column_dimensions[column_letter].width = adjusted_width
+
+        # Formato de número para la columna de importe ('I')
         for cell in worksheet['I'][1:]:
             cell.number_format = '#,##0.00'
             cell.alignment = right_alignment
+
+    # 4. Generar bytes y nombre de archivo final
     excel_bytes = output_buffer.getvalue()
     today = datetime.now()
     date_str = today.strftime("%d%m%Y")
     filename = f"CapitalExpress_{date_str}.xlsx"
+    
     return filename, excel_bytes
 
 # --- Función para Crear el HTML ---

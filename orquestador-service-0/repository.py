@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional
 from sqlalchemy import func
 from datetime import datetime
-from models import Operacion, Factura, Empresa # Ya no se importa CuentaDesembolso
+from models import Operacion, Factura, Empresa
 
 class OperationRepository:
     def __init__(self, db: Session):

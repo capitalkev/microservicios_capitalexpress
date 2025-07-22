@@ -153,7 +153,6 @@ async def validate_invoices(request: CavaliValidationRequest):
             }
         return {"status": "SUCCESS", "results": results_map}
     except requests.RequestException as e:
-        # ESTA ES LA LÍNEA QUE NOS DARÁ EL ERROR DETALLADO
         print(f"Excepción detallada de requests: {e}")
         error_detail = e.response.text if e.response else str(e)
         raise HTTPException(status_code=503, detail=f"Error de comunicación con Cavali: {error_detail}")

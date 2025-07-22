@@ -133,6 +133,7 @@ def process_operation_and_create_card(payload: Dict[str, Any]):
 
 ### CAVALI:
 {cavali_markdown}
+
 ### Cuenta bancaria:
 - **Banco:** {desembolso_banco}
 - **N°cuenta:** {desembolso_numero}

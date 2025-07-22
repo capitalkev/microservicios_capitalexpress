@@ -6,7 +6,7 @@ import requests
 from typing import List, Annotated
 from collections import defaultdict
 from dotenv import load_dotenv
-
+from datetime import datetime
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -58,8 +58,7 @@ async def submit_multi_currency_operation(
 ):
     try:
         metadata = json.loads(metadata_str)
-        upload_id = f"OP-{uuid.uuid4().hex[:8].upper()}"
-
+        upload_id = f"OP-{datetime.now().strftime('%Y%m%d')}"
         # --- 1. Subir archivos a GCS ---
         def upload_file(file: UploadFile, folder: str) -> str:
             blob_path = f"{upload_id}/{folder}/{file.filename}"
@@ -152,7 +151,7 @@ async def submit_multi_currency_operation(
                     })
             
             print("--- 📄 Enviando XMLs al servicio de CAVALI para validación ---")
-            cavali_results_json = {} # Inicializa como diccionario vacío
+            cavali_results_json = {}
             try:
                 cavali_response = requests.post(CAVALI_SERVICE_URL, json={"xml_files_data": xml_files_b64_group})
                 cavali_response.raise_for_status()
