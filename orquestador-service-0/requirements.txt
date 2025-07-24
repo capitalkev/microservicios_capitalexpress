@@ -7,3 +7,5 @@ python-dotenv
 sqlalchemy
 cloud-sql-python-connector[pg8000]
 psycopg2-binary
+
+firebase-admin

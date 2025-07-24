@@ -1,19 +1,27 @@
-import uuid
 import json
 import os
 import base64
 import requests
-from typing import List, Annotated
+from typing import List, Annotated, Optional
 from collections import defaultdict
 from dotenv import load_dotenv
 from datetime import datetime
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from google.cloud import storage
 from database import get_db, engine
 from repository import OperationRepository
 import models
+import firebase_admin
+from firebase_admin import credentials, auth
+
+try:
+    cred = credentials.ApplicationDefault()
+    firebase_admin.initialize_app(cred)
+    print("Firebase Admin SDK inicializado correctamente.")
+except Exception as e:
+    print(f"ERROR: No se pudo inicializar Firebase Admin SDK: {e}")
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -47,6 +55,36 @@ EXCEL_SERVICE_URL = os.getenv("EXCEL_SERVICE_URL")
 # --- Cliente de Google Storage ---
 storage_client = storage.Client()
 bucket = storage_client.bucket(BUCKET_NAME)
+
+
+@app.get("/api/operaciones", summary="Obtener operaciones por usuario")
+async def get_user_operations(
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Falta el token de autorización")
+
+    try:
+        token = authorization.split("Bearer ")[1]
+        decoded_token = auth.verify_id_token(token)
+        user_email = decoded_token['email']
+        user_name = decoded_token.get('name', user_email.split('@')[0])
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Token inválido: {e}")
+
+    try:
+        repo = OperationRepository(db)
+        last_login_timestamp = repo.update_and_get_last_login(user_email, user_name)
+        operaciones = repo.get_operations_by_user_email(user_email)
+        
+        return {
+            "last_login": last_login_timestamp.isoformat() if last_login_timestamp else None,
+            "operations": operaciones
+        }
+    except Exception as e:
+        print(f"Error al obtener operaciones de la base de datos: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al consultar las operaciones.")
 
 @app.post("/submit-operation", summary="Registrar y Procesar Operación")
 async def submit_multi_currency_operation(

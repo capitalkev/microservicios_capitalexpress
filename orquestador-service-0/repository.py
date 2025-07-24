@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional
 from sqlalchemy import func
 from datetime import datetime
-from models import Operacion, Factura, Empresa
+from models import Operacion, Factura, Empresa, Usuario 
 
 class OperationRepository:
     def __init__(self, db: Session):
@@ -86,3 +86,61 @@ class OperationRepository:
             
         self.db.commit()
         return operation_id
+    
+    def get_operations_by_user_email(self, email: str) -> List[Dict[str, Any]]:
+        """
+        Obtiene las operaciones de un usuario, uniendo la información del cliente.
+        """
+        # La consulta une Operacion y Empresa para obtener la razón social del cliente.
+        results = (
+            self.db.query(
+                Operacion.id,
+                Operacion.fecha_creacion.label("fechaIngreso"),
+                Empresa.razon_social.label("cliente"),
+                Operacion.monto_sumatoria_total.label("monto"),
+                Operacion.moneda_sumatoria.label("moneda"),
+                #Operacion.estado
+            )
+            .join(Empresa, Operacion.cliente_ruc == Empresa.ruc)
+            .filter(Operacion.email_usuario == email)
+            .order_by(Operacion.fecha_creacion.desc())
+            .all()
+        )
+        
+        # Convierte los resultados a un formato JSON que el frontend entienda
+        return [
+            {
+                "id": r.id,
+                "fechaIngreso": r.fechaIngreso.isoformat(),
+                "cliente": r.cliente,
+                "monto": r.monto,
+                "moneda": r.moneda,
+                "estado": "En Verificación" # Un valor por defecto si es nulo
+            }
+            for r in results
+        ]
+        
+    def update_and_get_last_login(self, email: str, name: str) -> Optional[datetime]:
+        """
+        Actualiza la hora de ingreso de un usuario y devuelve la anterior.
+        Si el usuario no existe, lo crea.
+        """
+        now = datetime.now()
+        
+        # Busca al usuario
+        usuario = self.db.query(Usuario).filter(Usuario.email == email).first()
+
+        if usuario:
+            # Si el usuario existe, guarda su fecha de ingreso anterior
+            previous_login = usuario.ultimo_ingreso
+            # Actualiza la fecha al momento actual
+            usuario.ultimo_ingreso = now
+        else:
+            # Si es la primera vez que ingresa, no hay ingreso anterior
+            previous_login = None
+            # Crea el nuevo usuario
+            usuario = Usuario(email=email, nombre=name, ultimo_ingreso=now)
+            self.db.add(usuario)
+        
+        self.db.commit()
+        return previous_login

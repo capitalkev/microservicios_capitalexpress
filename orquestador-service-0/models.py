@@ -4,6 +4,7 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
 
+# orquestador-service-0/models.py
 class Empresa(Base):
     __tablename__ = "empresas"
     ruc = Column(String(15), primary_key=True, index=True)
@@ -46,3 +47,11 @@ class Factura(Base):
     
     operacion = relationship("Operacion", back_populates="facturas")
     deudor = relationship("Empresa")
+    
+
+class Usuario(Base):
+    __tablename__ = "usuarios"
+    email = Column(String(255), primary_key=True, index=True)
+    nombre = Column(String(255))
+    # Esta columna guardará la fecha del último ingreso
+    ultimo_ingreso = Column(DateTime(timezone=True), server_default=func.now())
