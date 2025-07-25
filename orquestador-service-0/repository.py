@@ -92,22 +92,37 @@ class OperationRepository:
         Obtiene las operaciones de un usuario, uniendo la información del cliente.
         """
         # La consulta une Operacion y Empresa para obtener la razón social del cliente.
-        results = (
-            self.db.query(
-                Operacion.id,
-                Operacion.fecha_creacion.label("fechaIngreso"),
-                Empresa.razon_social.label("cliente"),
-                Operacion.monto_sumatoria_total.label("monto"),
-                Operacion.moneda_sumatoria.label("moneda"),
-                #Operacion.estado
+        if email == "kevin.tupac@capitalexpress.cl":
+            # Si es el usuario admin, retorna todas las operaciones
+            results = (
+                self.db.query(
+                    Operacion.id,
+                    Operacion.fecha_creacion.label("fechaIngreso"),
+                    Empresa.razon_social.label("cliente"),
+                    Operacion.monto_sumatoria_total.label("monto"),
+                    Operacion.moneda_sumatoria.label("moneda"),
+                    #Operacion.estado
+                )
+                .join(Empresa, Operacion.cliente_ruc == Empresa.ruc)
+                .order_by(Operacion.fecha_creacion.desc())
+                .all()
             )
-            .join(Empresa, Operacion.cliente_ruc == Empresa.ruc)
-            .filter(Operacion.email_usuario == email)
-            .order_by(Operacion.fecha_creacion.desc())
-            .all()
-        )
-        
-        # Convierte los resultados a un formato JSON que el frontend entienda
+        else:
+            # Si es un usuario normal, filtra por su email
+            results = (
+                self.db.query(
+                    Operacion.id,
+                    Operacion.fecha_creacion.label("fechaIngreso"),
+                    Empresa.razon_social.label("cliente"),
+                    Operacion.monto_sumatoria_total.label("monto"),
+                    Operacion.moneda_sumatoria.label("moneda"),
+                    #Operacion.estado
+                )
+                .join(Empresa, Operacion.cliente_ruc == Empresa.ruc)
+                .filter(Operacion.email_usuario == email)
+                .order_by(Operacion.fecha_creacion.desc())
+                .all()
+            )
         return [
             {
                 "id": r.id,

@@ -127,7 +127,7 @@ async def validate_invoices(request: CavaliValidationRequest):
             raise HTTPException(status_code=500, detail="Cavali no retornó un idProceso.")
 
         # Se recomienda un sleep mayor para dar tiempo a Cavali a procesar
-        time.sleep(3) 
+        time.sleep(7) 
         
         logging.info(f"Consultando estado del proceso con id: {id_proceso}")
         payload_estado = {"ProcessFilter": {"idProcess": id_proceso}}
